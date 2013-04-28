@@ -71,8 +71,7 @@ public class SparkBitcoinSms {
           } catch (TwiMLException e) {
             e.printStackTrace();
           }
-          //twiml.
-          //response.setContentType("application/xml");
+          response.type("application/xml"); 
           return twiml.toXML();
         }
       });
