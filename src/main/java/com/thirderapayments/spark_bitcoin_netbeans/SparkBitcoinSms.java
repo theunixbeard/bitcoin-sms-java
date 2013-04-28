@@ -16,6 +16,9 @@ import com.google.bitcoin.utils.*;
 import com.twilio.sdk.*;
 import com.twilio.sdk.resource.factory.SmsFactory;
 import com.twilio.sdk.resource.instance.Account;
+import com.twilio.sdk.verbs.Sms;
+import com.twilio.sdk.verbs.TwiMLException;
+import com.twilio.sdk.verbs.TwiMLResponse;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.logging.Level;
@@ -55,6 +58,22 @@ public class SparkBitcoinSms {
             Logger.getLogger(SparkBitcoinSms.class.getName()).log(Level.SEVERE, null, ex);
           }
           return "Message Sent";
+        }
+      });
+      get(new Route("/receive") {
+        @Override
+        public Object handle(Request request, Response response) {
+
+          TwiMLResponse twiml = new TwiMLResponse();
+          Sms sms = new Sms("Hello, Mobile Monkey");
+          try {
+            twiml.append(sms);
+          } catch (TwiMLException e) {
+            e.printStackTrace();
+          }
+          //twiml.
+          //response.setContentType("application/xml");
+          return twiml.toXML();
         }
       });
     }
