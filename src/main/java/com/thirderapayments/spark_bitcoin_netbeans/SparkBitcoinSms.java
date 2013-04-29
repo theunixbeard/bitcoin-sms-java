@@ -123,6 +123,18 @@ public class SparkBitcoinSms {
             return "Hello World!";
          }
       });
+      get(new Route("/echo") {
+         @Override
+         public Object handle(Request request, Response response) {
+          String smsBody = request.queryParams("Body");
+          if(smsBody != null) {
+            System.out.println(smsBody);
+          } else {
+            System.out.println("No message body in echo");
+          }
+          return "echoing to stdout";
+         }
+      });
       get(new Route("/send") {
         @Override
         public Object handle(Request request, Response response) {
@@ -220,7 +232,14 @@ public class SparkBitcoinSms {
             }
           }
           TwiMLResponse twiml = new TwiMLResponse();
-          composeTextResponseFromString(twiml, responseText);
+          List<String> smsMessages = splitStringIntoTexts(responseText);
+          for(String sms : smsMessages){
+            try {
+              twiml.append(new Sms(sms));
+            } catch (TwiMLException e) {
+              e.printStackTrace();
+            }
+          }
           response.type("application/xml"); 
           System.out.println("Done with response");
           return twiml.toXML();
@@ -270,10 +289,32 @@ public class SparkBitcoinSms {
     } else if(lines[0].equals("withdraw confirm")) {
       System.out.println("processing agentWithdrawConfirm");
       response = agentWithdrawConfirm(smsBody, request, session);
+    } else if(lines[0].equals("info")) {
+      System.out.println("sending info message");
+      response = infoRequest();
     } else {
       System.out.println("unknown message type: " + smsBody);
       response = "unknown message type"; //Add in what known message types are too!!!
     }
+    return response;
+  }
+  
+  String infoRequest() {
+    String response = "";
+    response += "Welcome to BitBeam Mobile Banking\n\n";
+    response += "To check balance send:\n";
+    response += "cb\n\n";
+    response += "To get address send:\n";
+    response += "a\n(1/3)~~";
+    response += "To transfer money send:\n";
+    response += "send\n";
+    response += "[recipient phone number, like 12223334444]\n";
+    response += "[amount to send in satoshis, like 100000]\n(2/3)~~";       
+    response += "To withdraw money send:\n";
+    response += "withdraw\n";
+    response += "[amount to withdraw in satoshis, like 100000]\n\n"; 
+    response += "To repeat this message send:\n";
+    response += "info\n(3/3)";
     return response;
   }
   
@@ -425,13 +466,46 @@ public class SparkBitcoinSms {
       e.printStackTrace();
       return "error: something went wrong on our end";
     }
-      return "Signup successful. Commands are:\n"
-              + "Send 'cb' for check balance.\n"
-              + "Send 'a' for your bitcoin address.\n\n(1/2)~~"
-              + "To send money to another user, send a message of the format:\n"
-              + "send\n"
-              + "[phone number]\n"
-              + "[amount]\n\n(2/2)";  
+    String confirmedUserPhoneNumber = unconfirmedUserPhoneNumber;
+    String welcomeMessage = "";
+    welcomeMessage += "Signup successful. Welcome to BitBeam Mobile Banking\n\n";
+    welcomeMessage += "To check balance send:\n";
+    welcomeMessage += "cb\n\n";
+    welcomeMessage += "To get address send:\n";
+    welcomeMessage += "a\n(1/3)~~";
+    welcomeMessage += "To transfer money send:\n";
+    welcomeMessage += "send\n";
+    welcomeMessage += "[recipient phone number, like 12223334444]\n";
+    welcomeMessage += "[amount to send in satoshis, like 100000]\n(2/3)~~";       
+    welcomeMessage += "To withdraw money send:\n";
+    welcomeMessage += "withdraw\n";
+    welcomeMessage += "[amount to withdraw in satoshis, like 100000]\n\n"; 
+    welcomeMessage += "To repeat this message send:\n";
+    welcomeMessage += "info\n(3/3)";
+    sendSms(confirmedUserPhoneNumber ,welcomeMessage);
+    String response = "Signup successful. Sent " + confirmedUserPhoneNumber + " a welcome message :)";
+    return response; 
+  }
+  
+    private List<String> splitStringIntoTexts(String responseText) {
+    List<String> smses = new ArrayList<String>();
+    if(responseText.length() < TEXT_LENGTH) {
+      smses.add(responseText);
+    }else {
+      String responses[] = responseText.split(TEXT_DELIMITER_STRING);
+      for(String response : responses) {
+        if(response.length() < TEXT_LENGTH) {
+          smses.add(response);
+        }else {
+          List<String> smsStrings = splitStringIntoTextChunks(response);
+          for(String smsString : smsStrings) {
+            smses.add(smsString);;
+          }
+        }
+      }
+    }
+    System.out.println("Done creating smses");
+    return smses;
   }
   
   private void composeTextResponseFromString(TwiMLResponse twiml, String responseText) {
@@ -680,14 +754,16 @@ public class SparkBitcoinSms {
     final Map<String, String> smsParams = new HashMap<String, String>();
     smsParams.put("To", number); // Replace with a valid phone number
     smsParams.put("From", TwilioNumber); // Replace with a valid phone number in your account
-    smsParams.put("Body", message);
-    try {
-      smsFactory.create(smsParams);
-      return true;
-    } catch (TwilioRestException ex) {
-      Logger.getLogger(SparkBitcoinSms.class.getName()).log(Level.SEVERE, null, ex);
+    List<String> smsMessages = splitStringIntoTexts(message);
+    for(String sms : smsMessages) {
+      smsParams.put("Body", sms);
+      try {
+        smsFactory.create(smsParams);
+      } catch (TwilioRestException ex) {
+        Logger.getLogger(SparkBitcoinSms.class.getName()).log(Level.SEVERE, null, ex);
+      }
     }
-    return false;
+    return true;
   }
   
   String userWithdrawRequest1(String smsBody, Request request, Session session) {
@@ -758,76 +834,65 @@ public class SparkBitcoinSms {
   
   String agentWithdrawConfirm(String smsBody, Request request, Session session) {
     String response = "";
-    if(!agentWithdrawValidations(smsBody.split("\n"))){
+    long amountWithdrawn = 0;
+    String lines[] = smsBody.split("\n");
+    if(!agentWithdrawValidations(lines)){
       response = "error: bad signup message";
       return response;
     }
-    String unconfirmedUserPhoneNumber = request.queryParams("From");
-    if(unconfirmedUserPhoneNumber == null) {
-      return "error: no user phone number in session";
-    }
-    session.removeAttribute("actionPath");    
-    System.out.println("User was in send action path, submitted: " + smsBody);
+    String unconfirmedUserPhoneNumber = "+" + lines[1];  
     try {
-      preparedStatement = connect.prepareStatement("select * from SparkBitcoinSms.UnconfirmedTransfers where phoneNumberFrom=?");
+      preparedStatement = connect.prepareStatement("select * from SparkBitcoinSms.UnconfirmedWithdrawals where phoneNumber=?");
       preparedStatement.setString(1, unconfirmedUserPhoneNumber);
       resultSet = preparedStatement.executeQuery();
       System.out.println(preparedStatement.toString());
-      boolean transferOccurred = false;
+      boolean withdrawalOccurred = false;
       while (resultSet.next()) {
-        if(resultSet.getString("confirmationCode").equals(smsBody)) {
-          if(transferOccurred) {
-            System.err.println("error: two or more unconfirmed transfers have been confirmed by one code");
+        if(resultSet.getString("confirmationCode").equals(lines[2])) {
+          if(withdrawalOccurred) {
+            System.err.println("error: two or more unconfirmed withdrawals have been confirmed by one code");
           }
-          transferOccurred = true;
-          System.out.println("transfer confirmed for " + resultSet.getString("phoneNumberFrom") + 
+          withdrawalOccurred = true;
+          System.out.println("withdrawal confirmed for " + resultSet.getString("phoneNumber") + 
                   " with code: " + resultSet.getString("confirmationCode"));
-          // Debit the sender and credit the receiver in the database
+          // Debit the withdrawer in the database
           /*
            * Need:
-           * Sender Number
-           * Receiver Number
-           * Sender Old Balance
-           * Receiver Old Balance
-           * Amount Sent
+           * Withdrawer Number
+           * Withdrawer Old Balance
+           * Amount Withdrawn
            */
-          String fromNumber = resultSet.getString("phoneNumberFrom");
-          String toNumber = resultSet.getString("phoneNumberTo");
-          long amountSent = resultSet.getLong("amount");
-          long oldSenderBalance = getBalanceForPhoneNumber(fromNumber);
-          long oldReceiverBalance = getBalanceForPhoneNumber(toNumber);
+          String fromNumber = unconfirmedUserPhoneNumber;
+          amountWithdrawn = resultSet.getLong("amount");
+          long oldWithdrawerBalance = getBalanceForPhoneNumber(fromNumber);
           String sql = "UPDATE SparkBitcoinSms.Users SET balance = ? WHERE phoneNumber = ?";
           preparedStatement = connect.prepareStatement(sql);
-          preparedStatement.setLong(1, oldSenderBalance - amountSent);
+          preparedStatement.setLong(1, oldWithdrawerBalance - amountWithdrawn);
           preparedStatement.setString(2, fromNumber);
-          preparedStatement.executeUpdate();
-          preparedStatement.setLong(1, oldReceiverBalance + amountSent);
-          preparedStatement.setString(2, toNumber);
           preparedStatement.executeUpdate();
           // Added to Transfers
           preparedStatement = connect
-            .prepareStatement("insert into  SparkBitcoinSms.Transfers "
-                  + "(id, phoneNumberTo, phoneNumberFrom, amount, created, updated) "
+            .prepareStatement("insert into  SparkBitcoinSms.Withdrawals "
+                  + "(id, phoneNumber, amount, created, updated) "
                   + "values "
-                  + "(default, ?, ?, ?, default, default)");
-          preparedStatement.setString(1, resultSet.getString("phoneNumberTo"));
-          preparedStatement.setString(2, resultSet.getString("phoneNumberFrom"));
-          preparedStatement.setLong(3, resultSet.getLong("amount"));
+                  + "(default, ?, ?, default, default)");
+          preparedStatement.setString(1, resultSet.getString("phoneNumber"));;
+          preparedStatement.setLong(2, resultSet.getLong("amount"));
           preparedStatement.executeUpdate();
-          System.out.println("Added entry to Transfers table");
+          System.out.println("Added entry to Withdrawals table");
           // Now remove from UnconfirmedUsers
           sql = "delete from UnconfirmedTransfers where id=?";
           preparedStatement = connect.prepareStatement(sql);
           preparedStatement.setLong(1, resultSet.getLong("id"));
           int rowsDeleted = preparedStatement.executeUpdate();
-          System.out.println(rowsDeleted + " rows deleted from unconfirmed transfers table.");
+          System.out.println(rowsDeleted + " rows deleted from unconfirmed withdrawals table.");
         }
       }
     } catch(Exception e) {
       e.printStackTrace();
       return "error: something went wrong on our end";
     }
-      return "Send successful."; 
+      return "Withdrawal for " + amountWithdrawn + " authorized."; 
   }
   
    boolean agentWithdrawValidations(String lines[]) {
@@ -835,14 +900,15 @@ public class SparkBitcoinSms {
      * Message format is:
      * withdraw confirm
      * phonenumber
+     * validation code
      */
             
     if(!lines[0].equals("withdraw confirm")){
       System.out.println("withdraw-confirm validation fail: first line not 'withdraw confirm'");
       return false;
     }
-    if(lines.length != 2){
-      System.out.println("withdraw-confirm validation fail: not 2 lines in message");
+    if(lines.length != 3){
+      System.out.println("withdraw-confirm validation fail: not 3 lines in message");
       return false;
     }
     String phoneNumber = lines[1];
